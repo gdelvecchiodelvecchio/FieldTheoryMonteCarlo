@@ -1,5 +1,5 @@
 
-using QuadGK, LinearAlgebra
+using QuadGK, LinearAlgebra, Distributions, Random, Plots
 
 # configuration here is a string of +1 or -1, the spins σ
 
