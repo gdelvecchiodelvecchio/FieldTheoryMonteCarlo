@@ -18,3 +18,10 @@ function ∂(v::Vector, dx; bc="pbc")
         return [(v[i+1] - v[i]) / dx for i in 1:n-1]
     end
 end
+
+
+# Space-time grid for 2d simulation. This will be a matrix.
+
+grid(n::Int64, m::Int64; dx=0.05, dy=dx) = [i*dx + j*dy for i in 0:n-1, j in 0:m-1]
+    
+

@@ -23,25 +23,30 @@ end
 
 # H = 1/2 ∫ |∂ϕ|^2 -(α^2 / γ^2 cos(γ ϕ) -1)
 
-h(ϕ::Vector, dx; α=1., γ=1.) = abs.(∂(ϕ, dx)).^2  .- (α^2 / γ^2 * cos.(γ * ϕ) .- 1)
-H(ϕ::Vector, dx; α=1., γ=1.) = 1/2. * ∫D(h(ϕ, dx; α, γ), dx)
+h(ϕ::Vector, dx=0.05; α=1., γ=1.) = 1/2. * abs.(∂(ϕ, dx)).^2  .- (α^2 / γ^2 * cos.(γ * ϕ) .- 1)
+H(ϕ::Vector, dx=0.05; α=1., γ=1.) = ∫D(h(ϕ, dx; α, γ), dx)
 
 #not normalized Boltzmann distribution
-P(ϕ::Vector, dx; α=1., γ=1., β=1) = exp(- β * H(ϕ, dx; α, γ))
+P(ϕ::Vector, dx=0.05; α=1., γ=1., β=1) = exp(- β * H(ϕ, dx; α, γ))
 
 init_field(L; dx=0.05) = collect(0:dx:L-dx) |> x->1/ sqrt(2π * L^2/36) .* exp.(-(x .- L/2).^2 / (L^2/36))
 random_field(L; dx=0.05) = init_field(L; dx=dx) .+ rand(Normal(0,0.001), Int(round(L/dx)))
 random_integer(n::Int64) = rand(DiscreteUniform(1, n))
+cumulant(ϕ::Vector, i::Int64; n=length(ϕ), m=2) = mean([(ϕ[mod1(i + s, n)] - ϕ[s]).^m for s in 1:n])
 
 
-function sg_montecarlo_equilibrate_forever_multiupdates(dx=0.05, σ0=rand(100) .* dx#=random_field(100; dx)=#; tol=10e-2, α=1., γ=1., β=1., observables=true)
+function sg_montecarlo_equilibrate_forever(dx=0.05, σ0=rand(100) .* dx#=random_field(100; dx)=#; tol=10e-2, α=1., γ=1., β=1., observables=true)
     n = length(σ0)
     ϕ = σ0 # distribution of spins to update
     if observables
-        av = zeros(n)
-        loc_av = zeros(n, 10^2)
-        loc_av[:, 1] = [cumulant(ϕ, s) for s in 1:n]
-        #av = [cumulant(π)] 
+        # I want to monitor second and fourth cumulant
+        C2 = zeros(n)
+        C2_loc = zeros(n, 10^2)
+        C2_loc[:, 1] = [cumulant(ϕ, s) for s in 1:n]
+        C4 = zeros(n)
+        C4_loc = zeros(n, 10^2)
+        C4_loc[:, 1] = [cumulant(ϕ, s; m=4) for s in 1:n]
+        #C2 = [cumulant(π)] 
         #en = zeros(n, nsteps) 
     end
     acc_rate = 1
@@ -51,15 +56,18 @@ function sg_montecarlo_equilibrate_forever_multiupdates(dx=0.05, σ0=rand(100) .
     loc_av_step = 1
     variance = 0.01
     gr(show = true) # in IJulia this would be: gr(show = :ijulia)
-    display(scatter([1], [0 *sum(loc_av[s, 1]/(s * dx) for s in 1:n)], legend=:none))
-    while tot_count <= 10^6
+    display(scatter([1], [0 *sum(C2_loc[s, 1]/(s * dx) for s in 1:n)], legend=:none, layout=2))
+    display(scatter!([1], [0 *sum(C4_loc[s, 1]/(s * dx) for s in 1:n)], legend=:none, subplot=2))
+    @inbounds @fastmath while tot_count <= 10^6
         if tot_count % 10^2 == 0
             loc_av_step = 1
             loc_step += 1
-            av = hcat(av, reshape(mapslices(mean, loc_av, dims=[2]), n))
-            display(scatter!([loc_step], [mean(av[s, loc_step]/(s * dx) for s in 1:n)]))
+            C2 = hcat(C2, reshape(mapslices(mean, C2_loc, dims=[2]), n))
+            display(scatter!([loc_step], [mean(C2[s, loc_step]/(s * dx) for s in 1:n)], subplot=1))
+            C4 = hcat(C4, reshape(mapslices(mean, C4_loc, dims=[2]), n))
+            display(scatter!([loc_step], [mean(C4[s, loc_step]/(s * dx) for s in 1:n)], subplot=2))
         end
-        j = rand(DiscreteUniform(1+nups, n-nups)) # for multiple updates use rand(DiscreteUniform(1, n), frac)
+        j = rand(DiscreteUniform(1, n)) # for multiple updates use rand(DiscreteUniform(1, n), frac)
         ϕnew = copy(ϕ)
         if acc_rate > 0.55
             variance = variance*2
@@ -81,34 +89,33 @@ function sg_montecarlo_equilibrate_forever_multiupdates(dx=0.05, σ0=rand(100) .
             #print("Reject \n")
         end
         loc_av_step += 1
-        loc_av[:,loc_av_step-1] = [cumulant(ϕ, s) for s in 1:n]
+        C2_loc[:,loc_av_step-1] = [cumulant(ϕ, s) for s in 1:n]
+        C4_loc[:,loc_av_step-1] = [cumulant(ϕ, s; m=4) for s in 1:n]
         acc_rate = acc_count/tot_count
         print("Acceptance rate= $(acc_rate)  \t nsteps=$tot_count \r")
         #sleep(1)
     end
     print("Acceptance rate= $(acc_rate) \n")
     if observables
-        return ϕ, av#, en
+        return ϕ, C2, C4#, en
     else
         return ϕ
     end
 end
 
 
-sample = sg_montecarlo_equilibrate_forever(0.05;  observables=false)
+sample = sg_montecarlo_equilibrate_forever(0.05;  observables=true)
 
 #hard to equilibrate and decrease the acceptance rate let me try local but multiple updates
-
-cumulant(ϕ::Vector, i::Int64; n=length(ϕ), m=2) = mean([(ϕ[mod1(i + s, n)] - ϕ[s]).^m for s in 1:n])
 
 function sg_montecarlo_equilibrate_forever_multiupdates(dx=0.05, σ0=rand(100) .* dx#=random_field(100; dx)=#; tol=10e-2, α=1., γ=1., β=1., observables=true)
     n = length(σ0)
     ϕ = σ0 # distribution of spins to update
     if observables
-        av = zeros(n)
-        loc_av = zeros(n, 10^2)
-        loc_av[:, 1] = [cumulant(ϕ, s) for s in 1:n]
-        #av = [cumulant(π)] 
+        C2 = zeros(n)
+        C2_loc = zeros(n, 10^2)
+        C2_loc[:, 1] = [cumulant(ϕ, s) for s in 1:n]
+        #C2 = [cumulant(π)] 
         #en = zeros(n, nsteps) 
     end
     acc_rate = 1
@@ -119,14 +126,14 @@ function sg_montecarlo_equilibrate_forever_multiupdates(dx=0.05, σ0=rand(100) .
     loc_av_step = 1
     variance = 0.01
     d = Int(nups/2)
-    gr(show = true) # in IJulia this would be: gr(show = :ijulia)
-    display(scatter([1], [0 *sum(loc_av[s, 1]/(s * dx) for s in 1:n)], legend=:none))
+    gr(show = true) 
+    display(scatter([1], [0 *sum(C2_loc[s, 1]/(s * dx) for s in 1:n)], legend=:none))
     while tot_count <= 10^6
         if tot_count % 10^2 == 0
             loc_av_step = 1
             loc_step += 1
-            av = hcat(av, reshape(mapslices(mean, loc_av, dims=[2]), n))
-            display(scatter!([loc_step], [mean(av[s, loc_step]/(s * dx) for s in 1:n)]))
+            C2 = hcat(C2, reshape(mapslices(mean, C2_loc, dims=[2]), n))
+            display(scatter!([loc_step], [mean(C2[s, loc_step]/(s * dx) for s in 1:n)]))
         end
         j = rand(DiscreteUniform(1+nups, n-nups)) # for multiple updates use rand(DiscreteUniform(1, n), frac)
         ϕnew = copy(ϕ)
@@ -150,14 +157,14 @@ function sg_montecarlo_equilibrate_forever_multiupdates(dx=0.05, σ0=rand(100) .
             #print("Reject \n")
         end
         loc_av_step += 1
-        loc_av[:,loc_av_step-1] = [cumulant(ϕ, s) for s in 1:n]
+        C2_loc[:,loc_av_step-1] = [cumulant(ϕ, s) for s in 1:n]
         acc_rate = acc_count/tot_count
         print("Acceptance rate= $(acc_rate)  \t nsteps=$tot_count \r")
         #sleep(1)
     end
     print("Acceptance rate= $(acc_rate) \n")
     if observables
-        return ϕ, av#, en
+        return ϕ, C2#, en
     else
         return ϕ
     end
